@@ -9,6 +9,22 @@ Copyright (c) Sara Cardona, PhD Researcher, ME, TU Delft (2025)
 When using this work, please cite one of these articles:
 https://doi.org/10.1016/j.jmps.2025.106257
 
+~~~bibtex
+@article{Cardona2025,
+  title = {TopoGEN: Topology-driven microstructure generation for in silico modeling of fiber network mechanics},
+  volume = {205},
+  ISSN = {0022-5096},
+  url = {http://dx.doi.org/10.1016/j.jmps.2025.106257},
+  DOI = {10.1016/j.jmps.2025.106257},
+  journal = {Journal of the Mechanics and Physics of Solids},
+  publisher = {Elsevier BV},
+  author = {Cardona,  Sara and Peirlinck,  Mathias and Fereidoonnezhad,  Behrooz},
+  year = {2025},
+  month = dec,
+  pages = {106257}
+}
+~~~
+
 ## Requirements
 - **Python**: pre-processing and data analysis
 - **Fortran**: bilinear USDFLD fiber behavior
