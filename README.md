@@ -3,6 +3,12 @@ TopoGEN is a framework that integrates three-dimensional image-informed fiber ne
 
 ![Abstract](figures/abstract.jpg)
 
+## Copyright
+Copyright (c) Sara Cardona, PhD Researcher, ME, TU Delft (2025)
+
+When using this work, please cite one of these articles:
+https://doi.org/10.1016/j.jmps.2025.106257
+
 ## Requirements
 - **Python**: pre-processing and data analysis
 - **Fortran**: bilinear USDFLD fiber behavior
@@ -64,9 +70,3 @@ Typical layout:
 
 ## Contributing
 Thank you for using TopoGEN! For any inquiries, additional help, customization, or any other problems/concerns/suggestions, please reach out to us via email. The author of this codes is Sara Cardona (s.cardona@tudelft.nl).
-
-## Copyright
-Copyright (c) Sara Cardona, PhD Researcher, ME, TU Delft (2025)
-
-To Cite this work please cite one of these articles:
-https://doi.org/10.1016/j.jmps.2025.106257
