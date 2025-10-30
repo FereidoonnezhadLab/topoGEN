@@ -1,7 +1,7 @@
 # TopoGEN
 TopoGEN is a framework that integrates three-dimensional image-informed fiber network generation with non-linear finite element analysis to support the mechanistic investigation of structure-function relationships in soft matter. 
 
-![Abstract](figures/abstract.png)
+![Abstract](figures/abstract.jpeg)
 
 ## Requirements
 - **Python**: pre-processing and data analysis
@@ -12,15 +12,15 @@ TopoGEN is a framework that integrates three-dimensional image-informed fiber ne
 The central component is the [`src`](./src) folder that implements the logic to generate the topologies and build the Abaqus input files for micromechanical modeling. Everything is embedded into one single main.py file. The auxiliary files in the source folder are intended to perform the following steps:
 
 - **STEP 1**: GENERATION OF A PERIODIC VORONOI IN THE 3D SPACE ([network generation](src/create_periodic_network.py))
-![Abstract](figures/periodicity.png)
+![Abstract](figures/periodicity.jpeg)
 
 - **STEP 2**: OPTIMIZATION OF THE STRUCTURE AGAINST THE PARAMETERS  [network optimization](src/optimize_periodic_network.py)
-![Abstract](figures/optimization.png)
-![Abstract](figures/length_optimization.png)
+![Abstract](figures/optimization.jpeg)
+![Abstract](figures/length_optimization.jpeg)
 
 - **STEP 3**: NETWORK REFINEMENT (REMOVES DANGLING ENDS AND UNCONNECTED EDGES)
 - **STEP 4**: GENERATION OF THE MICROMECHANICAL TESTS TO BE RUN IN ABAQUS [Abaqus input files](src/write_abaqus_input_file.py)
-![Abstract](figures/loading.png)
+![Abstract](figures/loading.jpeg)
 
 
 The user can select the topological input or the range that they want to test and then the pipeline proceeds with the posprocessing of the simulation results. The folder [`analysis`](./analysis) contains functions to:
