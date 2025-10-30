@@ -1,7 +1,7 @@
 # TopoGEN
 TopoGEN is a framework that integrates three-dimensional image-informed fiber network generation with non-linear finite element analysis to support the mechanistic investigation of structure-function relationships in soft matter. 
 
-<img src="abstract.png" alt="Abstract" style="width:100%;display:block;margin:auto;" />
+<img src="figures/abstract.png" alt="Abstract" style="width:100%;display:block;margin:auto;" />
 
 ## Requirements
 - **Python**: pre-processing and data analysis
@@ -12,10 +12,14 @@ TopoGEN is a framework that integrates three-dimensional image-informed fiber ne
 The central component is the [`src`](./src) folder that implements the logic to generate the topologies and build the Abaqus input files for micromechanical modeling. Everything is embedded into one single main.py file. The auxiliary files in the source folder are intended to perform the following steps:
 
 - **STEP 1**: GENERATION OF A PERIODIC VORONOI IN THE 3D SPACE ([network generation](src/create_periodic_network.py))
-
+<img src="figures/periodicity.png" alt="periodicity" style="width:100%;display:block;margin:auto;" />
 - **STEP 2**: OPTIMIZATION OF THE STRUCTURE AGAINST THE PARAMETERS  [network optimization](src/optimize_periodic_network.py)
+<img src="figures/optimization.png" alt="optimization" style="width:100%;display:block;margin:auto;" />
+<img src="figures/length_optimization.png" alt="length_optimization" style="width:40%;display:block;margin:auto;" />
 - **STEP 3**: NETWORK REFINEMENT (REMOVES DANGLING ENDS AND UNCONNECTED EDGES)
 - **STEP 4**: GENERATION OF THE MICROMECHANICAL TESTS TO BE RUN IN ABAQUS [Abaqus input files](src/write_abaqus_input_file.py)
+<img src="figures/loading.png" alt="loading" style="width:100%;display:block;margin:auto;" />
+
 
 The user can select the topological input or the range that they want to test and then the pipeline proceeds with the posprocessing of the simulation results. The folder [`analysis`](./analysis) contains functions to:
 - quantify the impact of each microstructural parameter on the bulk mechanical properties [`microstructural effects`](./analysis/microstructural_effects/)
