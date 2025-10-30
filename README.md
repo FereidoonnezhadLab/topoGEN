@@ -1,7 +1,7 @@
 # TopoGEN
 TopoGEN is a framework that integrates three-dimensional image-informed fiber network generation with non-linear finite element analysis to support the mechanistic investigation of structure-function relationships in soft matter. 
 
-![Abstract](abstract.svg)
+![Abstract](abstract.png)
 
 ## Requirements
 - **Python**: pre-processing and data analysis
