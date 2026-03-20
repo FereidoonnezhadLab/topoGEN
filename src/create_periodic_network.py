@@ -1,8 +1,3 @@
-"""
-Author: Sara Cardona
-Date: 19/01/2024
-Refactor: 04/02/2024
-"""
 from scipy.spatial import Voronoi, cKDTree
 import numpy as np
 from collections import defaultdict
@@ -12,30 +7,25 @@ output_directory = None
 
 def tile_points(points, N):
     """
-    This function takes the original points and creates 26 additional copies of these points, each offset to one of the
-    surrounding areas in the 3D space. This tiling is used to handle the PBCs for the Voronoi diagram.
-    Args:
-    - points: position of the initial seeds in the 3D space
-    - N: number of seeds
-
-    Returns:
-    - point_tile: original points + their 26 replica
+    Tiles the original points in 3D for periodic boundary conditions.
+    If anisotropic is True, the tiling offset in the aniso_axis direction is divided by aniso_compression.
     """
     if points.shape[0] != N:
         raise ValueError(f"Expected points array of length {N}, but got {points.shape[0]}")
     print("Tiling points...")
-    # Start the timer
+    import time
     start_time = time.time()
-    point_tile = np.zeros((27 * N, 3))  # 27 times the original points (3x3x3 grid)
+    point_tile = np.zeros((27 * N, 3))
     index = 0
     for x in [-1, 0, 1]:
         for y in [-1, 0, 1]:
             for z in [-1, 0, 1]:
-                offset = np.array([x, y, z])
+                offset = np.array([x, y, z], dtype=float)
+                # if anisotropic:
+                #     offset[aniso_axis] /= aniso_compression
                 segment = points + offset
                 point_tile[index * N:(index + 1) * N] = segment
                 index += 1
-    # End the timer and print the elapsed time
     elapsed_time = time.time() - start_time
     print(f"Time taken for tiling: {elapsed_time:.6f} seconds")
     return point_tile
@@ -208,7 +198,7 @@ def merge_close_vertices(vertices, edges, bounds, merge_threshold, max_degree):
     Args:
     - vertices: position of the vertices
     - edges: edges of the Voronoi ridges
-    - bounds: boundaries of the cubic domain
+    - bounds: boundaries of the domain
     - merge_threshold: threshold for merging edges
     - max_degree: maximum degree of the edges (maximum valency)
 
@@ -370,7 +360,6 @@ def find_periodic_pairs(vertices, bounds):
     print(f"Time taken for Finding periodic pairs: {elapsed_time:.6f} seconds")
     return periodic_pairs
 
-
 def calculate_mean_length(vertices, edges):
     lengths = []
     for edge in edges:
@@ -380,39 +369,327 @@ def calculate_mean_length(vertices, edges):
         lengths.append(length)
     return np.mean(lengths) if lengths else 0
 
-
-def lloyd_relaxation_3d_periodic(points, iterations, N):
+def lloyd_relaxation_3d_periodic(points, iterations, N, relax):
     """
     Perform Lloyd's relaxation in 3D with periodic boundary conditions.
-
-    Args:
-    - points: Initial seed points in the main computational domain.
-    - iterations: Number of Lloyd iterations to perform.
-    - N: Number of points in the main computational domain.
-
-    Returns:
-    - The relaxed points in the main computational domain after the specified number of iterations.
     """
-    print("Lloyd relaxation...")
-    # Start the timer
+    print("Lloyd relaxation..." if relax else "Skipping Lloyd relaxation...")
+    import time
     start_time = time.time()
-    for i in range(iterations):
-        point_tile = tile_points(points, N)
-        vor = Voronoi(point_tile)
-        new_points = []
-        for point_idx in range(N):
-            region_index = vor.point_region[point_idx]
-            region = vor.regions[region_index]
-
-            if -1 not in region and len(region) > 0:
-                polygon = vor.vertices[region]
-                centroid = polygon.mean(axis=0)
-                centroid = np.mod(centroid, 1)
-                new_points.append(centroid)
-            else:
-                new_points.append(points[point_idx])
-        points = np.array(new_points)
+    if relax:
+        for i in range(iterations):
+            point_tile = tile_points(points, N)
+            vor = Voronoi(point_tile)
+            new_points = []
+            for point_idx in range(N):
+                region_index = vor.point_region[point_idx]
+                region = vor.regions[region_index]
+                if -1 not in region and len(region) > 0:
+                    polygon = vor.vertices[region]
+                    centroid = polygon.mean(axis=0)
+                    centroid = np.mod(centroid, 1)
+                    new_points.append(centroid)
+                else:
+                    new_points.append(points[point_idx])
+            points = np.array(new_points)
+    point_tile = tile_points(points, N)
+    vor = Voronoi(point_tile)
     elapsed_time = time.time() - start_time
     print(f"Time taken for Lloyd relaxation: {elapsed_time:.6f} seconds")
-    return points, vor
+    return vor
 
+import math
+import numpy as np
+from collections import defaultdict
+
+def find_periodic_pairs_with_dim(vertices, bounds, atol=1e-8):
+    """
+    Find periodic pairs between opposite boundaries and return the face dimension.
+    Uses per-dimension cell lengths for the normal separation check.
+
+    Returns a list of tuples: (i_low, j_high, dim), where dim in {0,1,2}.
+    """
+    lengths = [abs(bounds[d][1] - bounds[d][0]) for d in range(3)]
+    boundary_nodes = defaultdict(list)
+
+    # Classify boundary nodes on each face
+    for i, node in enumerate(vertices):
+        for dim in range(3):
+            if np.isclose(node[dim], bounds[dim][0], atol=atol):
+                boundary_nodes[(dim, 'low')].append((i, node))
+            elif np.isclose(node[dim], bounds[dim][1], atol=atol):
+                boundary_nodes[(dim, 'high')].append((i, node))
+
+    periodic_pairs = []
+    paired_nodes = set()
+
+    def is_counterpart(node1, node2, dim):
+        other = [ax for ax in (0, 1, 2) if ax != dim]
+        same_transverse = all(np.isclose(node1[ax], node2[ax], atol=atol) for ax in other)
+        sep_normal = np.isclose(abs(node1[dim] - node2[dim]), lengths[dim], atol=atol)
+        return same_transverse and sep_normal
+
+    # Pair per dimension
+    for dim in range(3):
+        low_nodes = boundary_nodes[(dim, 'low')]
+        high_nodes = boundary_nodes[(dim, 'high')]
+        for i, node_low in low_nodes:
+            if i in paired_nodes:
+                continue
+            for j, node_high in high_nodes:
+                if j in paired_nodes:
+                    continue
+                if is_counterpart(node_low, node_high, dim):
+                    periodic_pairs.append((i, j, dim))
+                    paired_nodes.update([i, j])
+                    break
+
+    return periodic_pairs
+
+def count_pairs_by_dim(pairs):
+    counts = {0: 0, 1: 0, 2: 0}
+    for _, _, dim in pairs:
+        counts[dim] += 1
+    return counts
+    
+def impose_preferential_orientation(
+    nodes0,
+    edges,
+    V0=None,
+    bounds=None,
+    a=(1, 0, 0),
+    P2_target=0.5,
+    tol=1e-3,
+    max_iter=50,
+    length_weighted=False,
+    expand_bracket_if_needed=True,
+    pairwise_mode="copy_low"  # "copy_low" or "average"
+):
+    """
+    Impose preferential orientation via uniaxial affine stretch and hydrostatic rescaling.
+    Then enforce pairwise transverse motion of boundary nodes to preserve initial periodic mapping.
+
+    Backward-compatible signature: accepts V0 (optional). If bounds are not provided,
+    a cubic domain is derived from V0. If both are provided and inconsistent, bounds win.
+
+    Prints the number of periodic pairs per direction (x,y,z) before and after.
+    """
+
+    # ----------------------
+    # Helpers
+    # ----------------------
+    def normalize(v):
+        v = np.asarray(v, dtype=float)
+        n = np.linalg.norm(v)
+        return v if n == 0 else v / n
+
+    def segment_dir_len(nodes, i, j):
+        d = nodes[j] - nodes[i]
+        l = np.linalg.norm(d)
+        if l == 0.0:
+            return np.zeros(3), 0.0
+        return d / l, l
+
+    def orientation_P2(nodes, edges, a_unit, length_weighted):
+        "Hermans parameter (P2) for the network along the user-defined axis"
+        sum_w = 0.0
+        sum_wc2 = 0.0
+        for i, j in edges:
+            n, l = segment_dir_len(nodes, i, j)
+            if l == 0:
+                continue
+            c = float(np.dot(n, a_unit))
+            w = l if length_weighted else 1.0
+            sum_w += w
+            sum_wc2 += w * c * c
+        if sum_w == 0.0:
+            return 0.0
+        mean_c2 = sum_wc2 / sum_w
+        return 0.5 * (3.0 * mean_c2 - 1.0)
+
+    def rotation_matrix_mapping_ex_to_a(a_unit):
+        "rotation matrix that maps the x-axis to the desired axis "
+        ex = np.array([1.0, 0.0, 0.0])
+        a_unit = np.asarray(a_unit)
+        v = np.cross(ex, a_unit)
+        s = np.linalg.norm(v)
+        c = np.dot(ex, a_unit)
+        if s == 0:
+            return np.eye(3) if c > 0 else np.array([[-1,0,0],[0,1,0],[0,0,-1]])
+        vx = np.array([[0.0,   -v[2],  v[1]],
+                       [v[2],  0.0,   -v[0]],
+                       [-v[1], v[0],  0.0]])
+        return np.eye(3) + vx + vx @ vx * ((1.0 - c) / (s * s))
+
+    def build_uniaxial_F(a_unit, s):
+        R = rotation_matrix_mapping_ex_to_a(a_unit)
+        lambda1 = math.exp(s)
+        lambda2 = math.exp(-s / 2.0)
+        D = np.diag([lambda1, lambda2, lambda2])  # det = lambda1 * lambda2^2 = 1
+        F = R @ D @ R.T
+        return F, lambda1, lambda2
+
+    def apply_affine(nodes, F):
+        return (F @ nodes.T).T
+
+    def total_length(nodes, edges):
+        return sum(np.linalg.norm(nodes[j] - nodes[i]) for i, j in edges)
+
+    def density(nodes, edges, volume):
+        return total_length(nodes, edges) / volume
+
+    def hydrostatic_rescale(nodes, lambda_h):
+        return nodes * lambda_h
+
+    def count_pairs_by_dim(pairs):
+        counts = {0: 0, 1: 0, 2: 0}
+        for _, _, dim in pairs:
+            counts[dim] += 1
+        return counts
+
+    # ----------------------
+    # Resolve bounds and volume (backward compatibility)
+    # ----------------------
+    if bounds is None:
+        L = 1.0 if V0 is None else float(V0) ** (1.0 / 3.0)
+        half = L / 2.0
+        bounds = ((-half, half), (-half, half), (-half, half))
+
+    V_bounds = abs(bounds[0][1] - bounds[0][0]) * abs(bounds[1][1] - bounds[1][0]) * abs(bounds[2][1] - bounds[2][0])
+    if V0 is None:
+        V0 = V_bounds
+    else:
+        if abs(V_bounds - V0) > 1e-12:
+            print(f"[warning] Provided V0={V0} differs from bounds volume={V_bounds}. Using bounds volume.")
+            V0 = V_bounds
+
+    # ----------------------
+    # Setup
+    # ----------------------
+    nodes0 = np.asarray(nodes0, dtype=float)
+    edges = np.asarray(edges, dtype=int)
+    a_unit = normalize(a)
+
+    # Periodic pairs BEFORE
+    pairs_before = find_periodic_pairs_with_dim(nodes0, bounds)
+    counts_before = count_pairs_by_dim(pairs_before)
+    print(f"Periodic pairs BEFORE (strict boundary): x={counts_before[0]}, y={counts_before[1]}, z={counts_before[2]}")
+
+    rho0 = density(nodes0, edges, V0)
+
+    # ----------------------
+    # Bisection on s to reach P2_target
+    # ----------------------
+    s_low, s_high = -4.0, 4.0
+
+    def P2_of_s(s):
+        F, _, _ = build_uniaxial_F(a_unit, s)
+        nodes_tmp = apply_affine(nodes0, F)
+        return orientation_P2(nodes_tmp, edges, a_unit, length_weighted)
+
+    if expand_bracket_if_needed:
+        P2_lo = P2_of_s(s_low)
+        P2_hi = P2_of_s(s_high)
+        expand_count = 0
+        while not (P2_lo <= P2_target <= P2_hi) and expand_count < 8:
+            s_low -= 2.0
+            s_high += 2.0
+            P2_lo = P2_of_s(s_low)
+            P2_hi = P2_of_s(s_high)
+            expand_count += 1
+
+    nodes_oriented = nodes0.copy()
+    s_star = 0.0
+    lambda1_star = 1.0
+    lambda2_star = 1.0
+
+    for _ in range(max_iter):
+        s_mid = 0.5 * (s_low + s_high)
+        F_mid, lambda1_mid, lambda2_mid = build_uniaxial_F(a_unit, s_mid)
+        nodes_mid = apply_affine(nodes0, F_mid)
+        P2_mid = orientation_P2(nodes_mid, edges, a_unit, length_weighted)
+
+        nodes_oriented = nodes_mid
+        s_star = s_mid
+        lambda1_star = lambda1_mid
+        lambda2_star = lambda2_mid
+
+        if abs(P2_mid - P2_target) <= tol:
+            break
+        if P2_mid < P2_target:
+            s_low = s_mid
+        else:
+            s_high = s_mid
+
+    # ----------------------
+    # Hydrostatic scaling
+    # ----------------------
+    rho_after = density(nodes_oriented, edges, V0)
+    lambda_h = 1.0 if rho_after == 0 else math.sqrt(rho_after / rho0)
+
+    nodes_final = hydrostatic_rescale(nodes_oriented, lambda_h)
+
+    # ----------------------
+    # Enforce pairwise transverse motion
+    # ----------------------
+    if pairs_before:
+        nodes_final = np.array(nodes_final, dtype=float)
+        for i_low, j_high, dim in pairs_before:
+            other = [ax for ax in (0,1,2) if ax != dim]
+            if pairwise_mode == "copy_low":
+                delta_trans = nodes_final[i_low, other] - nodes0[i_low, other]
+                nodes_final[j_high, other] = nodes0[j_high, other] + delta_trans
+            elif pairwise_mode == "average":
+                avg = 0.5 * (nodes_final[i_low, other] + nodes_final[j_high, other])
+                nodes_final[i_low, other] = avg
+                nodes_final[j_high, other] = avg
+            else:
+                raise ValueError("pairwise_mode must be 'copy_low' or 'average'")
+
+    # Count pairs AFTER (transverse-match only)
+    counts_after_trans = {0: 0, 1: 0, 2: 0}
+    for i_low, j_high, dim in pairs_before:
+        other = [ax for ax in (0,1,2) if ax != dim]
+        if np.allclose(nodes_final[i_low, other], nodes_final[j_high, other], atol=1e-8):
+            counts_after_trans[dim] += 1
+    print(f"Periodic pairs AFTER (transverse-match): x={counts_after_trans[0]}, y={counts_after_trans[1]}, z={counts_after_trans[2]}")
+
+    # ----------------------
+    # Strict boundary re-check in the NEW deformed domain (axis-aligned case)
+    # ----------------------
+    # Compute new axis-aligned bounds per axis using known scale factors
+    Lx0 = abs(bounds[0][1] - bounds[0][0])
+    Ly0 = abs(bounds[1][1] - bounds[1][0])
+    Lz0 = abs(bounds[2][1] - bounds[2][0])
+
+    Lx_new = lambda_h * lambda1_star * Lx0
+    Ly_new = lambda_h * lambda2_star * Ly0
+    Lz_new = lambda_h * lambda2_star * Lz0
+
+    bounds_after = (
+        (-0.5 * Lx_new, 0.5 * Lx_new),
+        (-0.5 * Ly_new, 0.5 * Ly_new),
+        (-0.5 * Lz_new, 0.5 * Lz_new),
+    )
+
+    pairs_after_strict = find_periodic_pairs_with_dim(nodes_final, bounds_after)
+    counts_after_strict = count_pairs_by_dim(pairs_after_strict)
+    print(f"Periodic pairs AFTER (strict boundary, new bounds): x={counts_after_strict[0]}, y={counts_after_strict[1]}, z={counts_after_strict[2]}")
+
+    # ----------------------
+    # Diagnostics
+    # ----------------------
+    P2_final = orientation_P2(nodes_final, edges, a_unit, length_weighted)
+    V_final = V0 * (lambda_h ** 3)
+    rho_final = density(nodes_final, edges, V_final)
+
+    lambdas = {
+        "lambda1": lambda1_star,
+        "lambda2": lambda2_star,
+        "lambda_h": lambda_h,
+        "s_star": s_star,
+        "pairwise_mode": pairwise_mode,
+        "bounds_after": bounds_after,
+    }
+
+    return nodes_final, P2_final, rho_final, lambdas

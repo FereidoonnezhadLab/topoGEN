@@ -1,8 +1,3 @@
-"""
-Author: Sara Cardona
-Date: 19/01/2024
-Refactor: 04/02/2024
-"""
 
 import os
 import numpy as np
@@ -62,18 +57,24 @@ def edges_length(nodes, edges):
     return edge_length
 
 
-def compute_volume_fraction(total_fiber_length, fiber_radius, RVE_size):
+def compute_volume_fraction(total_fiber_length, fiber_radius, domain_physical_dimension):
     """
-    Computes the fiber volume fraction.
+    Computes the fiber volume fraction for cubic or anisotropic domains.
     Args:
-    - TotalFiberLength: The total length of fibers in micrometers.
+    - total_fiber_length: The total length of fibers in micrometers.
+    - fiber_radius: The radius of the fibers.
+    - domain_physical_dimension: Scalar (for cubic) or 3-element vector (for anisotropic) domain size(s).
 
     Returns:
     - volume_fraction: The fraction of the domain volume occupied by fibers.
     """
     fiber_area = np.pi * (fiber_radius) ** 2
     total_fiber_volume = fiber_area * total_fiber_length
-    rve_volume = RVE_size ** 3  # Volume of the domain in physical units
+    # Support both scalar and vector for domain_physical_dimension
+    if hasattr(domain_physical_dimension, '__len__') and len(domain_physical_dimension) == 3:
+        rve_volume = np.prod(domain_physical_dimension)
+    else:
+        rve_volume = domain_physical_dimension ** 3
 
     volume_fraction = total_fiber_volume / rve_volume
 
@@ -180,73 +181,6 @@ def remove_empty_lines(file_path):
                     prev_was_nonempty = False
 
 
-def classify_nodes(periodic_x, periodic_y, periodic_z, nodes, tolerance, DomainPhysicalDimension):
-
-    """
-    Classifies nodes into boundary groups based on their spatial location within a given domain.
-
-    Args:
-    - periodic_x: List of node pairs defining periodicity along the X-axis.
-    - periodic_y: List of node pairs defining periodicity along the Y-axis.
-    - periodic_z: List of node pairs defining periodicity along the Z-axis.
-    - nodes: List of node coordinates, where each node is represented as (x, y, z).
-    - tolerance: Tolerance value to determine if a node belongs to a boundary.
-    - DomainPhysicalDimension: The physical dimension of the domain, used to define boundary limits.
-
-    Return:
-    - boundaries (dict): A dictionary where keys are boundary names ('NegX', 'PosX', 'NegY', 'PosY', 'NegZ', 'PosZ')
-          and values are lists of node IDs that belong to each boundary.
-    """
-
-    A = DomainPhysicalDimension / 2
-
-    periodic_nodes = set(node for edge in (periodic_x + periodic_y + periodic_z) for node in edge)
-
-    boundaries = {
-        'NegX': [],
-        'PosX': [],
-        'NegY': [],
-        'PosY': [],
-        'NegZ': [],
-        'PosZ': [],
-    }
-
-    assigned_nodes = set()  # To keep track of nodes that have already been assigned to a boundary
-
-    # Order of boundaries can dictate priority
-    priority_keys = ['NegX', 'PosX', 'NegY', 'PosY', 'NegZ', 'PosZ']
-
-    for i, (x, y, z) in enumerate(nodes):
-        node_id = i + 1  # Adjust to 1-based indexing used in external files and boundary assignment
-
-        if node_id in periodic_nodes:
-            continue  # Skip nodes that are periodic
-        if node_id in assigned_nodes:
-            continue  # Skip nodes that have already been assigned
-
-        for key in priority_keys:
-            boundary_check = False
-            if key == 'NegX' and abs(x + A) <= tolerance:
-                boundary_check = True
-            elif key == 'PosX' and abs(x - A) <= tolerance:
-                boundary_check = True
-            elif key == 'NegY' and abs(y + A) <= tolerance:
-                boundary_check = True
-            elif key == 'PosY' and abs(y - A) <= tolerance:
-                boundary_check = True
-            elif key == 'NegZ' and abs(z + A) <= tolerance:
-                boundary_check = True
-            elif key == 'PosZ' and abs(z - A) <= tolerance:
-                boundary_check = True
-
-            if boundary_check:
-                boundaries[key].append(node_id)  # Node id is already 1-based here
-                assigned_nodes.add(node_id)  # Store as 1-based
-                break
-
-    return boundaries
-
-
 def write_elements(filename, elements, start_index=1):
     with open(filename, 'w') as file:
         for idx, element in enumerate(elements, start=start_index):
@@ -290,29 +224,50 @@ def write_abaqus_input_files(
     periodic_x_length = len(periodic_x)
     periodic_y_length = len(periodic_y)
     periodic_z_length = len(periodic_z)
-    half_domain_physical_dimension = domain_physical_dimension / 2
+    # Support both scalar and vector for domain_physical_dimension
+    if hasattr(domain_physical_dimension, '__len__') and len(domain_physical_dimension) == 3:
+        half_domain_physical_dimension = np.array(domain_physical_dimension) / 2
+        Lx, Ly, Lz = domain_physical_dimension
+    else:
+        half_domain_physical_dimension = domain_physical_dimension / 2
+        Lx = Ly = Lz = domain_physical_dimension
+
+    def _iter_nodes_with_ids(nodes_obj):
+        if isinstance(nodes_obj, dict):
+            for node_id, coord in nodes_obj.items():
+                yield node_id, np.asarray(coord, dtype=float)
+        else:
+            for idx, coord in enumerate(nodes_obj, start=1):
+                yield idx, np.asarray(coord, dtype=float)
+
+    stabilization_node = None
+    min_dist = None
+    for node_id, coord in _iter_nodes_with_ids(nodes):
+        dist = np.linalg.norm(coord)
+        if min_dist is None or dist < min_dist:
+            min_dist = dist
+            stabilization_node = node_id
 
     def dummy_node_lines(load_type):
         lines = []
-        if load_type in ["X_Uniaxial_Tension", "XY_Equibiaxial_Tension", "XZ_Equibiaxial_Tension", "XY_Simple_Shear", "XZ_Simple_Shear"]:
-            for i in range(periodic_x_length):
-                lines.append("%i, %.2f, 0.0, 0.0" % (5000000 + i, domain_physical_dimension / (2 if "Shear" in load_type else 1)))
-        if load_type in ["Y_Uniaxial_Tension", "XY_Equibiaxial_Tension", "YZ_Equibiaxial_Tension", "YZ_Simple_Shear"]:
-            for i in range(periodic_y_length):
-                lines.append("%i, 0.0, %.2f, 0.0" % (6000000 + i, domain_physical_dimension / (2 if "Shear" in load_type else 1)))
-        if load_type in ["Z_Uniaxial_Tension", "XZ_Equibiaxial_Tension", "YZ_Equibiaxial_Tension"]:
-            for i in range(periodic_z_length):
-                lines.append("%i, 0.0, 0.0, %.2f" % (7000000 + i, domain_physical_dimension / (2 if "Shear" in load_type else 1)))
+        # Always add dummy nodes for X, Y, Z directions
+        for i in range(periodic_x_length):
+            val = Lx / (2 if "Shear" in load_type else 1)
+            lines.append("%i, %.2f, 0.0, 0.0" % (5000000 + i, val))
+        for i in range(periodic_y_length):
+            val = Ly / (2 if "Shear" in load_type else 1)
+            lines.append("%i, 0.0, %.2f, 0.0" % (6000000 + i, val))
+        for i in range(periodic_z_length):
+            val = Lz / (2 if "Shear" in load_type else 1)
+            lines.append("%i, 0.0, 0.0, %.2f" % (7000000 + i, val))
         return lines
-
+    
     def dummy_node_sets(load_type):
         sets = []
-        if load_type in ["X_Uniaxial_Tension", "XY_Equibiaxial_Tension", "XZ_Equibiaxial_Tension", "XY_Simple_Shear", "XZ_Simple_Shear"]:
-            sets.append(("DummyXNodes", 5000000, 5000000 + periodic_x_length - 1))
-        if load_type in ["Y_Uniaxial_Tension", "XY_Equibiaxial_Tension", "YZ_Equibiaxial_Tension", "YZ_Simple_Shear"]:
-            sets.append(("DummyYNodes", 6000000, 6000000 + periodic_y_length - 1))
-        if load_type in ["Z_Uniaxial_Tension", "XZ_Equibiaxial_Tension", "YZ_Equibiaxial_Tension"]:
-            sets.append(("DummyZNodes", 7000000, 7000000 + periodic_z_length - 1))
+        # Always add dummy node sets for X, Y, Z directions
+        sets.append(("DummyXNodes", 5000000, 5000000 + periodic_x_length - 1))
+        sets.append(("DummyYNodes", 6000000, 6000000 + periodic_y_length - 1))
+        sets.append(("DummyZNodes", 7000000, 7000000 + periodic_z_length - 1))
         return sets
 
     def boundary_lines(load_type):
@@ -320,367 +275,107 @@ def write_abaqus_input_files(
         uniaxial_strain = 0.25
         biaxial_strain = 0.25
         shear_strain = 0.5
-        dummy_disp = {
-            "uniaxial": uniaxial_strain * domain_physical_dimension,
-            "biaxial": biaxial_strain * domain_physical_dimension,
-            "shear": shear_strain * domain_physical_dimension,
-        }
-        if load_type == "X_Uniaxial_Tension":
-            lines.append("DummyXNodes, 1, 1, %.6f" % dummy_disp["uniaxial"])
-        elif load_type == "Y_Uniaxial_Tension":
-            lines.append("DummyYNodes, 2, 2, %.6f" % dummy_disp["uniaxial"])
-        elif load_type == "Z_Uniaxial_Tension":
-            lines.append("DummyZNodes, 3, 3, %.6f" % dummy_disp["uniaxial"])
-        elif load_type == "XY_Equibiaxial_Tension":
-            lines.append("DummyXNodes, 1, 1, %.6f" % dummy_disp["biaxial"])
-            lines.append("DummyYNodes, 2, 2, %.6f" % dummy_disp["biaxial"])
-        elif load_type == "XZ_Equibiaxial_Tension":
-            lines.append("DummyXNodes, 1, 1, %.6f" % dummy_disp["biaxial"])
-            lines.append("DummyZNodes, 3, 3, %.6f" % dummy_disp["biaxial"])
-        elif load_type == "YZ_Equibiaxial_Tension":
-            lines.append("DummyYNodes, 2, 2, %.6f" % dummy_disp["biaxial"])
-            lines.append("DummyZNodes, 3, 3, %.6f" % dummy_disp["biaxial"])
-        elif load_type == "XY_Simple_Shear":
-            lines.append("DummyXNodes, 2, 2, %.6f" % dummy_disp["shear"])
-        elif load_type == "XZ_Simple_Shear":
-            lines.append("DummyXNodes, 3, 3, %.6f" % dummy_disp["shear"])
-        elif load_type == "YZ_Simple_Shear":
-            lines.append("DummyYNodes, 3, 3, %.6f" % dummy_disp["shear"])
-        return lines
+        # Support both scalar and vector for domain_physical_dimension
+        if hasattr(domain_physical_dimension, '__len__') and len(domain_physical_dimension) == 3:
+            Lx, Ly, Lz = domain_physical_dimension
+        else:
+            Lx = Ly = Lz = domain_physical_dimension
 
-    def write_equations_X_Uniaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):    
+        dummy_disp = {
+            'X_Uniaxial_Tension': uniaxial_strain * Lx,
+            'Y_Uniaxial_Tension': uniaxial_strain * Ly,
+            'Z_Uniaxial_Tension': uniaxial_strain * Lz,
+            'XY_Equibiaxial_Tension': (biaxial_strain * Lx, biaxial_strain * Ly),
+            'XZ_Equibiaxial_Tension': (biaxial_strain * Lx, biaxial_strain * Lz),
+            'YZ_Equibiaxial_Tension': (biaxial_strain * Ly, biaxial_strain * Lz),
+            'XY_Simple_Shear': shear_strain * Ly,  # Shear in Y for X nodes
+            'XZ_Simple_Shear': shear_strain * Lz,  # Shear in Z for X nodes
+            'YZ_Simple_Shear': shear_strain * Lz,  # Shear in Z for Y nodes
+        }
+
+        if load_type == "X_Uniaxial_Tension":
+            lines.append("DummyXNodes, 1, 1, %.6f" % dummy_disp['X_Uniaxial_Tension'])
+        elif load_type == "Y_Uniaxial_Tension":
+            lines.append("DummyYNodes, 2, 2, %.6f" % dummy_disp['Y_Uniaxial_Tension'])
+        elif load_type == "Z_Uniaxial_Tension":
+            lines.append("DummyZNodes, 3, 3, %.6f" % dummy_disp['Z_Uniaxial_Tension'])
+        elif load_type == "XY_Equibiaxial_Tension":
+            dx, dy = dummy_disp['XY_Equibiaxial_Tension']
+            lines.append("DummyXNodes, 1, 1, %.6f" % dx)
+            lines.append("DummyYNodes, 2, 2, %.6f" % dy)
+        elif load_type == "XZ_Equibiaxial_Tension":
+            dx, dz = dummy_disp['XZ_Equibiaxial_Tension']
+            lines.append("DummyXNodes, 1, 1, %.6f" % dx)
+            lines.append("DummyZNodes, 3, 3, %.6f" % dz)
+        elif load_type == "YZ_Equibiaxial_Tension":
+            dy, dz = dummy_disp['YZ_Equibiaxial_Tension']
+            lines.append("DummyYNodes, 2, 2, %.6f" % dy)
+            lines.append("DummyZNodes, 3, 3, %.6f" % dz)
+        elif load_type == "XY_Simple_Shear":
+            lines.append("DummyXNodes, 2, 2, %.6f" % dummy_disp['XY_Simple_Shear'])
+            lines.append("DummyXNodes, 1, 1, 0") 
+            lines.append("DummyXNodes, 3, 3, 0") 
+            lines.append("DummyYNodes, 1, 3, 0")
+            lines.append("DummyZNodes, 1, 3, 0")
+        elif load_type == "XZ_Simple_Shear":
+            lines.append("DummyXNodes, 3, 3, %.6f" % dummy_disp['XZ_Simple_Shear'])
+            lines.append("DummyXNodes, 1, 2, 0")
+            lines.append("DummyYNodes, 1, 3, 0")
+            lines.append("DummyZNodes, 1, 3, 0")
+        elif load_type == "YZ_Simple_Shear":
+            lines.append("DummyYNodes, 3, 3, %.6f" % dummy_disp['YZ_Simple_Shear'])
+            lines.append("DummyYNodes, 1, 2, 0")
+            lines.append("DummyXNodes, 1, 3, 0")
+            lines.append("DummyZNodes, 1, 3, 0")
+        lines.append(f"{stabilization_node}, 1, 3, 0")
+        return lines
+    
+
+    def write_equations(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):    
+        
+        # X DIR EQUATIONS
         dummy_node_id = 5000000
         for pair in periodic_x_edges:
             f.write("*Equation\n")
             f.write("3\n")
             f.write("%i, 1, 1., %i, 1, -1., %i, 1, -1.\n" % (pair[1], pair[0], dummy_node_id))
+            f.write("*Equation\n")
+            f.write("3\n")
+            f.write("%i, 2, 1., %i, 2, -1., %i, 2, -1.\n" % (pair[1], pair[0], dummy_node_id)) 
+            f.write("*Equation\n")
+            f.write("3\n")
+            f.write("%i, 3, 1., %i, 3, -1., %i, 3, -1.\n" % (pair[1], pair[0], dummy_node_id))          
             dummy_node_id += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_y_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_z_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
 
-    def write_equations_Y_Uniaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
+        # Y DIR EQUATIONS
         dummy_node_id = 6000000
         for pair in periodic_y_edges:
             f.write("*Equation\n")
             f.write("3\n")
+            f.write("%i, 1, 1., %i, 1, -1., %i, 1, -1.\n" % (pair[1], pair[0], dummy_node_id))
+            f.write("*Equation\n")
+            f.write("3\n")
             f.write("%i, 2, 1., %i, 2, -1., %i, 2, -1.\n" % (pair[1], pair[0], dummy_node_id))
+            f.write("*Equation\n")
+            f.write("3\n")
+            f.write("%i, 3, 1., %i, 3, -1., %i, 3, -1.\n" % (pair[1], pair[0], dummy_node_id))        
             dummy_node_id += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_x_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_z_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
 
-    def write_equations_Z_Uniaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
+
+        # Z DIR EQUATIONS
         dummy_node_id = 7000000
         for pair in periodic_z_edges:
             f.write("*Equation\n")
             f.write("3\n")
+            f.write("%i, 1, 1., %i, 1, -1., %i, 1, -1.\n" % (pair[1], pair[0], dummy_node_id))
+            f.write("*Equation\n")
+            f.write("3\n")
+            f.write("%i, 2, 1., %i, 2, -1., %i, 2, -1.\n" % (pair[1], pair[0], dummy_node_id))
+            f.write("*Equation\n")
+            f.write("3\n")
             f.write("%i, 3, 1., %i, 3, -1., %i, 3, -1.\n" % (pair[1], pair[0], dummy_node_id))
             dummy_node_id += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_x_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_y_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
 
-    def write_equations_XY_Equibiaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
-        dummy_node_id_x = 5000000
-        for pair in periodic_x_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 1, 1., %i, 1, -1., %i, 1, -1.\n" % (pair[1], pair[0], dummy_node_id_x))
-            dummy_node_id_x += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        dummy_node_id_y = 6000000
-        for pair in periodic_y_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 2, 1., %i, 2, -1., %i, 2, -1.\n" % (pair[1], pair[0], dummy_node_id_y))
-            dummy_node_id_y += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_z_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-
-    def write_equations_XZ_Equibiaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
-        dummy_node_id_x = 5000000
-        for pair in periodic_x_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 1, 1., %i, 1, -1., %i, 1, -1.\n" % (pair[1], pair[0], dummy_node_id_x))
-            dummy_node_id_x += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        dummy_node_id_z = 7000000
-        for pair in periodic_z_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 3, 1., %i, 3, -1., %i, 3, -1.\n" % (pair[1], pair[0], dummy_node_id_z))
-            dummy_node_id_z += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_y_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-
-    def write_equations_YZ_Equibiaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
-        dummy_node_id_y = 6000000
-        for pair in periodic_y_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 2, 1., %i, 2, -1., %i, 2, -1.\n" % (pair[1], pair[0], dummy_node_id_y))
-            dummy_node_id_y += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        dummy_node_id_z = 7000000
-        for pair in periodic_z_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 3, 1., %i, 3, -1., %i, 3, -1.\n" % (pair[1], pair[0], dummy_node_id_z))
-            dummy_node_id_z += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_x_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-
-    def write_equations_XY_Simple_Shear(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
-        dummy_node_id_x = 5000000
-        for pair in periodic_x_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 2, 1., %i, 2, -1., %i, 2, -1.\n" % (pair[1], pair[0], dummy_node_id_x))
-            dummy_node_id_x += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_y_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_z_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-
-    def write_equations_XZ_Simple_Shear(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
-        dummy_node_id_x = 5000000
-        for pair in periodic_x_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 3, 1., %i, 3, -1., %i, 3, -1.\n" % (pair[1], pair[0], dummy_node_id_x))
-            dummy_node_id_x += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_y_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_z_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-
-    def write_equations_YZ_Simple_Shear(f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
-        dummy_node_id_y = 6000000
-        for pair in periodic_y_edges:
-            f.write("*Equation\n")
-            f.write("3\n")
-            f.write("%i, 3, 1., %i, 3, -1., %i, 3, -1.\n" % (pair[1], pair[0], dummy_node_id_y))
-            dummy_node_id_y += 1
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_x_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-        for pair in periodic_z_edges:
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 1, 1., %i, 1, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 2, 1., %i, 2, -1.\n" % (pair[1], pair[0]))
-            f.write("*Equation\n")
-            f.write("2\n")
-            f.write("%i, 3, 1., %i, 3, -1.\n" % (pair[1], pair[0]))
-
-    def write_equations(load_type, f, periodic_x_edges, periodic_y_edges, periodic_z_edges):
-        if load_type == "X_Uniaxial_Tension":
-            write_equations_X_Uniaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        elif load_type == "Y_Uniaxial_Tension":
-            write_equations_Y_Uniaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        elif load_type == "Z_Uniaxial_Tension":
-            write_equations_Z_Uniaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        elif load_type == "XY_Equibiaxial_Tension":
-            write_equations_XY_Equibiaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        elif load_type == "XZ_Equibiaxial_Tension":
-            write_equations_XZ_Equibiaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        elif load_type == "YZ_Equibiaxial_Tension":
-            write_equations_YZ_Equibiaxial_Tension(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        elif load_type == "XY_Simple_Shear":
-            write_equations_XY_Simple_Shear(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        elif load_type == "XZ_Simple_Shear":
-            write_equations_XZ_Simple_Shear(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        elif load_type == "YZ_Simple_Shear":
-            write_equations_YZ_Simple_Shear(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
-        else:
-            raise ValueError(f"Unknown loading condition: {load_type}") 
 
     def write_connector_section(
         f,
@@ -861,7 +556,11 @@ def write_abaqus_input_files(
             # HEADING
             f.write("*Heading")
             f.write(f"\n**{load_type} Test of a cubic Representative Volume Element")
-            f.write("\n**Computational Unit Length = %i, Stress [MPa], Force [uN]" % domain_physical_dimension)
+            # Print all three dimensions if anisotropic, otherwise scalar
+            if hasattr(domain_physical_dimension, '__len__') and len(domain_physical_dimension) == 3:
+                f.write("\n**Computational Unit Lengths = %.3f x %.3f x %.3f, Stress [MPa], Force [uN]" % tuple(domain_physical_dimension))
+            else:
+                f.write("\n**Computational Unit Length = %.3f, Stress [MPa], Force [uN]" % domain_physical_dimension)
             f.write("\n**Fiber volume fraction: %.4f" % phi)
             f.write("\n**Concentration: %.3f mg/mL" % concentration)
             f.write("\n**Seeds number: %i" % N)
@@ -892,7 +591,7 @@ def write_abaqus_input_files(
 
             # Periodic Boundary Equations
             # Modularize by making per-load_type routines for equations:
-            write_equations(load_type, f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
+            write_equations(f, periodic_x_edges, periodic_y_edges, periodic_z_edges)
             if connector_options.get('rotational_damper', False) or connector_options.get('translational_and_rotational_damper', False):
                 for joint_nodes in joint_nodes_dict.values():
                     if len(joint_nodes) > 1:
@@ -926,9 +625,19 @@ def write_abaqus_input_files(
             
             # MATERIAL DEFINITION
             f.write("\n*Material, name=CollagenMaterial")
-            f.write("\n *Elastic")
-            f.write("\n %.2f, %.4f" % (young_modulus, poisson_ratio))
-
+            f.write("\n*Density")
+            f.write("\n0.000001,")
+            #f.write("\n *Elastic")
+            #f.write("\n %.2f, %.4f" % (young_modulus, poisson_ratio))
+            f.write("\n*Elastic, dependencies=1")
+            min_modulus = young_modulus / 10
+            mid_modulus = (young_modulus + min_modulus) / 2
+            for emod, fv1 in zip([min_modulus, min_modulus, mid_modulus, young_modulus, young_modulus], [-1.0, -0.1, 0.0, 0.1, 1.0]):
+                f.write("\n{:.2f}, {:.4f}, , {:.1f}".format(emod, poisson_ratio, fv1))
+            
+            f.write("\n* USER DEFINED FIELD")
+            f.write("\n* DEPVAR")
+            f.write("\n1")
             needs_rotational = connector_options.get('rotational_damper', False) or \
                             connector_options.get('translational_and_rotational_damper', False)
             needs_translational = connector_options.get('translational_damper', False)
@@ -954,29 +663,49 @@ def write_abaqus_input_files(
                     rotational_damping_coefficient
                 )
             
-            # STEP DEFINITION
+            # STEP DEFINITION IMPLICIT STATIC
             f.write("\n*Time Points, name=MustPoints, GENERATE")
             f.write("\n0., 1., 0.01")
-            f.write("\n*Step, name = UniaxialTest, INC=1000000, nlgeom=YES")
-            f.write("\n*Static,  stabilize, ALLSDTOL = 0.02")
-            f.write("\n0.01, 1., 1e-100, 0.01")
-            f.write("\n*Controls, parameters=time incrementation")
-            f.write("\n, , , , , , , 100, , ,")
+            #f.write("\n*Step, name = UniaxialTest, INC=1000000, nlgeom=YES")
+            #f.write("\n*Static,  stabilize, ALLSDTOL = 0.02")
+            #f.write("\n0.01, 1., 1e-100, 0.01")
+            #f.write("\n*Controls, parameters=time incrementation")
+            #f.write("\n, , , , , , , 100, , ,")
             #f.write("\n*Amplitude, definition = SMOOTH STEP, name = Smooth")
             #f.write("\n0,0,1,1")
 
+            # STEP DEFINITION IMPLICIT DYNNAMIC
+            f.write("\n*Step, name=QUASI_STATIC_ANALYSIS, nlgeom=YES, INC=10000")
+            f.write("\nQUASI-STATIC")          
+            f.write("\n*Dynamic,application=QUASI-STATIC,initial=NO")
+            f.write("\n0.01,1,1e-05")
+            f.write("\n*Amplitude, definition = SMOOTH STEP, name = Smooth")
+            f.write("\n0,0,1,1")            
+
+
             # BOUNDARY CONDITIONS
-            f.write("\n*Boundary, type = Displacement")
+            f.write("\n*Boundary, type = Displacement, amplitude=Smooth")
             for bound_line in boundary_lines(load_type):
                 f.write("\n" + bound_line)
 
             # OUTPUT
-            f.write("\n*Output, history, variable=PRESELECT, time points=MustPoints")
-            f.write("\n*Output, field, variable=PRESELECT, time points=MustPoints ")
-            f.write("\n *Element Output, elset=Beams, POSITION=INTEGRATION POINTS")
-            f.write("\n  S, SE, SF, SP, SM, SK, E, NE, LE")
-            f.write("\n*Node Output, nset= AllNodes")
-            f.write("\nU, RF")
+            f.write("\n**")
+            f.write("\n** FIELD OUTPUT: F-Output-1")
+            f.write("\n**")
+            f.write("\n*Output, field, time points=MUSTPOINTS")
+            f.write("\n*Node Output")  
+            f.write("\nRF, RM, RT, U, UR, UT, V, VR, VT")
+            f.write("\n*Element Output")      
+            f.write("\nE, EE, ELEDEN, ELEN, ENER, IE, LE, MISES, MISESONLY, S, SE, SEE, THE, VE, VEEQ")
+            f.write("\n SF, SP, SM, SK, NE, LE") 
+            f.write("\n ESEDEN, ESDDEN")  
+            f.write("\n**")
+            f.write("\n** HISTORY OUTPUT: H-Output-1")
+            f.write("\n**")
+            f.write("\n*Output, history, time points=MUSTPOINTS")
+            f.write("\n*Element Output")
+            f.write("\nIRA1, IRA2, IRA3, IRAR1, IRAR2, IRAR3, IRF1, IRF2, IRF3, IRM1, IRM2, IRM3")   
+            f.write("\n*Energy Output, variable=ALL")
             f.write("\n*End Step")
         remove_empty_lines(file_path)
 
