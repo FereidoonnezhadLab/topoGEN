@@ -94,3 +94,9 @@ For each sample, the pipeline creates a dedicated output folder containing all g
 
 ## Contributing
 Thank you for using TopoGEN! For any inquiries, additional help, customization, or any other problems/concerns/suggestions, please reach out to us via email. The author of this codes is Sara Cardona (s.cardona@tudelft.nl).
+
+## Copyright
+Copyright (c) Sara Cardona, PhD Researcher, ME, TU Delft (2025)
+
+To Cite this work please cite one of these articles:
+https://doi.org/10.1016/j.jmps.2025.106257
